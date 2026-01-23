@@ -1,49 +1,62 @@
 import requests
 from bs4 import BeautifulSoup
-import hashlib
 import os
 
-# Telegram settings
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+BOT_TOKEN = os.environ['BOT_TOKEN']
+CHAT_ID = os.environ['CHAT_ID']
+URL = "https://www.rtjamtland.se/larm/"
 
-# URL att kolla
-URL = "https://www.rtjamtland.se/larm/2026/01/"
+def get_latest_alarm():
+    response = requests.get(URL)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    
+    # Hitta alarms-container
+    alarms_container = soup.find('div', class_='alarms-container')
+    
+    if alarms_container:
+        # Hitta första li-elementet (senaste larmet)
+        first_alarm = alarms_container.find('li')
+        
+        if first_alarm:
+            # Hitta länken inuti li
+            link = first_alarm.find('a')
+            
+            if link and link.get('href'):
+                alarm_url = link.get('href')
+                
+                # Om det är en relativ URL, gör den absolut
+                if not alarm_url.startswith('http'):
+                    alarm_url = "https://www.rtjamtland.se" + alarm_url
+                
+                # Extrahera rubrik och datum
+                h3 = first_alarm.find('h3')
+                span = first_alarm.find('span')
+                
+                alarm_title = h3.get_text(strip=True) if h3 else "Larm"
+                alarm_date = span.get_text(strip=True) if span else ""
+                
+                alarm_text = f"{alarm_title}\n{alarm_date}"
+                
+                return alarm_url, alarm_text
+    
+    return None, None
 
-STATE_FILE = "last_alarm.txt"
-
-# Hämta sidan
-res = requests.get(URL)
-res.raise_for_status()
-soup = BeautifulSoup(res.text, "html.parser")
-
-# Hitta larmen (ändra detta CSS-selektor efter behov)
-alarms = soup.select(".larm")  # <-- kontrollera att det matchar div / klass på sidan
-if not alarms:
-    print("Ingen larm hittade på sidan.")
-    exit()
-
-# Ta det senaste larmet
-latest = alarms[0].get_text(" ", strip=True)
-latest_hash = hashlib.sha256(latest.encode()).hexdigest()
-
-# Läs tidigare hash
-previous_hash = ""
-if os.path.exists(STATE_FILE):
-    with open(STATE_FILE, "r") as f:
-        previous_hash = f.read().strip()
-
-# Skicka notis om nytt
-if latest_hash != previous_hash:
-    msg = f"🚨 NYTT LARM:\n{latest}"
+def send_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": msg}
-    r = requests.post(url, data=payload)
-    if r.ok:
-        print(f"Skickade notis: {latest}")
-    else:
-        print(f"Fel vid Telegram: {r.text}")
+    data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
+    response = requests.post(url, data=data)
+    return response.json()
 
-# Uppdatera state-filen
-with open(STATE_FILE, "w") as f:
-    f.write(latest_hash)
+def main():
+    # Läs tidigare URL
+    try:
+        with open('last_alarm.txt', 'r') as f:
+            last_url = f.read().strip()
+    except FileNotFoundError:
+        last_url = ""
+    
+    # Hämta nytt larm
+    alarm_url, alarm_text = get_latest_alarm()
+    
+    if alarm_url and alarm_url != last_url:
+        # Formatera meddelandet
